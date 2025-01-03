@@ -103,48 +103,62 @@ class Detect(nn.Module):
 
             return x, cls_score_list, reg_distri_list, reg_lrtb_list
         else:
-            cls_score_list = []
-            reg_lrtb_list = []
+            # Inference mode with separate outputs
+            outputs = []  # Store separate outputs for each scale
 
+            # Generate anchors for all scales at once
+            anchor_points, stride_tensor = generate_anchors(
+                x, self.stride, self.grid_cell_size, self.grid_cell_offset, 
+                device=x[0].device, is_eval=True, mode='af'
+            )
+
+            # Process each detection layer
+            start_idx = 0
             for i in range(self.nl):
                 b, _, h, w = x[i].shape
                 l = h * w
-                x[i] = self.stems[i](x[i])
-                cls_x = x[i]
-                reg_x = x[i]
-                cls_feat = self.cls_convs[i](cls_x)
+                
+                # Process features through network
+                feat = self.stems[i](x[i])
+                cls_feat = self.cls_convs[i](feat)
+                reg_feat = self.reg_convs[i](feat)
+                
+                # Get predictions
                 cls_output = self.cls_preds[i](cls_feat)
-                reg_feat = self.reg_convs[i](reg_x)
-                reg_output_lrtb = self.reg_preds[i](reg_feat)
-
+                reg_output = self.reg_preds[i](reg_feat)
+                
+                # Apply sigmoid to classification outputs
                 cls_output = torch.sigmoid(cls_output)
+                
+                # Reshape to maintain spatial dimensions
+                cls_output = cls_output.permute(0, 2, 3, 1)  # [b, h, w, nc]
+                reg_output = reg_output.permute(0, 2, 3, 1)  # [b, h, w, 4]
+                
+                # Get anchors for this scale
+                end_idx = start_idx + h * w
+                scale_anchor_points = anchor_points[start_idx:end_idx]
+                scale_stride = stride_tensor[start_idx:end_idx]
+                
+                # Convert regression outputs to boxes
+                pred_bboxes = dist2bbox(
+                    reg_output.reshape(-1, 4), 
+                    scale_anchor_points,
+                    box_format='xywh'
+                )
+                pred_bboxes = pred_bboxes.reshape(b, h, w, 4)
+                pred_bboxes *= scale_stride[0]  # Apply stride scaling
+                
+                # Combine predictions for this scale
+                scale_output = torch.cat([
+                    pred_bboxes,  # [b, h, w, 4]
+                    torch.ones((b, h, w, 1), device=pred_bboxes.device),  # confidence
+                    cls_output    # [b, h, w, nc]
+                ], dim=-1)
+                
+                outputs.append(scale_output)
+                start_idx = end_idx
 
-                if self.export:
-                    cls_score_list.append(cls_output)
-                    reg_lrtb_list.append(reg_output_lrtb)
-                else:
-                    cls_score_list.append(cls_output.reshape([b, self.nc, l]))
-                    reg_lrtb_list.append(reg_output_lrtb.reshape([b, 4, l]))
-
-            if self.export:
-                return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_lrtb_list))
-
-            cls_score_list = torch.cat(cls_score_list, axis=-1).permute(0, 2, 1)
-            reg_lrtb_list = torch.cat(reg_lrtb_list, axis=-1).permute(0, 2, 1)
-
-
-            anchor_points, stride_tensor = generate_anchors(
-                x, self.stride, self.grid_cell_size, self.grid_cell_offset, device=x[0].device, is_eval=True, mode='af')
-
-            pred_bboxes = dist2bbox(reg_lrtb_list, anchor_points, box_format='xywh')
-            pred_bboxes *= stride_tensor
-            return torch.cat(
-                [
-                    pred_bboxes,
-                    torch.ones((b, pred_bboxes.shape[1], 1), device=pred_bboxes.device, dtype=pred_bboxes.dtype),
-                    cls_score_list
-                ],
-                axis=-1)
+            return outputs
 
 
 def build_effidehead_layer(channels_list, num_anchors, num_classes, reg_max=16):
