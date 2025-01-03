@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from yolov6.models.yolo import *
-from yolov6.models.effidehead import Detect
+from yolov6.models.heads.effidehead_distill_ns import Detect
 from yolov6.layers.common import *
 from yolov6.utils.events import LOGGER
 from yolov6.utils.checkpoint import load_checkpoint
@@ -108,7 +108,7 @@ if __name__ == '__main__':
                               do_constant_folding=True,
                               input_names=['images'],
                               output_names=['num_dets', 'det_boxes', 'det_scores', 'det_classes']
-                              if args.end2end else ['outputs'],
+                              if args.end2end else ['output1', 'output2', 'output3'],
                               dynamic_axes=dynamic_axes)
             f.seek(0)
             # Checks
