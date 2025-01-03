@@ -11,25 +11,27 @@ def generate_anchors(feats, fpn_strides, grid_cell_size=5.0, grid_cell_offset=0.
     num_anchors_list = []
     assert feats is not None
     if is_eval:
+        anchor_points = []
+        stride_tensor = []
+        
         for i, stride in enumerate(fpn_strides):
             _, _, h, w = feats[i].shape
             shift_x = torch.arange(end=w, device=device) + grid_cell_offset
             shift_y = torch.arange(end=h, device=device) + grid_cell_offset
             shift_y, shift_x = torch.meshgrid(shift_y, shift_x, indexing='ij') if torch_1_10_plus else torch.meshgrid(shift_y, shift_x)
-            anchor_point = torch.stack(
-                    [shift_x, shift_y], axis=-1).to(torch.float)
-            if mode == 'af': # anchor-free
+            
+            anchor_point = torch.stack([shift_x, shift_y], axis=-1).to(torch.float)
+            
+            if mode == 'af':  # anchor-free
                 anchor_points.append(anchor_point.reshape([-1, 2]))
                 stride_tensor.append(
-                torch.full(
-                    (h * w, 1), stride, dtype=torch.float, device=device))
-            elif mode == 'ab': # anchor-based
-                anchor_points.append(anchor_point.reshape([-1, 2]).repeat(3,1))
-                stride_tensor.append(
-                    torch.full(
-                        (h * w, 1), stride, dtype=torch.float, device=device).repeat(3,1))
+                    torch.full((h * w, 1), stride, dtype=torch.float, device=device)
+                )
+        
+        # Concatenate all scales but maintain ability to split later
         anchor_points = torch.cat(anchor_points)
         stride_tensor = torch.cat(stride_tensor)
+        
         return anchor_points, stride_tensor
     else:
         for i, stride in enumerate(fpn_strides):
